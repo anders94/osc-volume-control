@@ -286,6 +286,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Background task to continuously read the potentiometer
     tokio::spawn(async move {
+        let mut last_sent_value: Option<f32> = None;
+        let mut last_sent_time = std::time::Instant::now();
+        const OSC_CHANGE_THRESHOLD: f32 = 0.001;  // Send if value changes by more than 0.1%
+        const OSC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);  // Send at least once per second
+
         loop {
             match reader.analog_read() {
                 Ok(value) => {
@@ -315,10 +320,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     *last_reading_clone.lock().unwrap() = value;
 
-                    // Send OSC message with final processed value
-                    if let Some(ref sender) = osc_sender {
-                        if let Err(e) = sender.send_value(OSC_ADDRESS, actual) {
-                            eprintln!("OSC send error: {}", e);
+                    // Determine if we should send OSC message
+                    let should_send = if let Some(last_value) = last_sent_value {
+                        // Send if value changed significantly
+                        let value_changed = (actual - last_value).abs() > OSC_CHANGE_THRESHOLD;
+                        // Or if keepalive interval elapsed
+                        let keepalive_due = last_sent_time.elapsed() >= OSC_KEEPALIVE_INTERVAL;
+                        value_changed || keepalive_due
+                    } else {
+                        // First reading, always send
+                        true
+                    };
+
+                    // Send OSC message if needed
+                    if should_send {
+                        if let Some(ref sender) = osc_sender {
+                            if let Err(e) = sender.send_value(OSC_ADDRESS, actual) {
+                                eprintln!("OSC send error: {}", e);
+                            } else {
+                                last_sent_value = Some(actual);
+                                last_sent_time = std::time::Instant::now();
+                            }
                         }
                     }
                 }
@@ -326,7 +348,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Error reading potentiometer: {}", e);
                 }
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;  // 10 Hz sampling rate
         }
     });
 
