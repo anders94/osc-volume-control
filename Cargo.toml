@@ -1,5 +1,5 @@
 [package]
-name = "gpio-potentiometer"
+name = "osc-volume-control"
 version = "0.1.0"
 edition = "2021"
 
